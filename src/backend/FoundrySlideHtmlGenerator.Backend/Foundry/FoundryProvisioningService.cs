@@ -147,11 +147,15 @@ public sealed class FoundryProvisioningService : BackgroundService
         var definitions = new List<AgentDefinition>
         {
             AgentDefinitions.Planner(),
+            AgentDefinitions.WebResearch(),
             AgentDefinitions.HtmlGenerator(),
             AgentDefinitions.Validator()
         };
 
-        // Note: File research agent is intentionally not provisioned while the feature is disabled.
+        if (!string.IsNullOrWhiteSpace(_resources.VectorStoreId))
+        {
+            definitions.Add(AgentDefinitions.FileResearch(_resources.VectorStoreId));
+        }
 
         foreach (var definition in definitions)
         {
