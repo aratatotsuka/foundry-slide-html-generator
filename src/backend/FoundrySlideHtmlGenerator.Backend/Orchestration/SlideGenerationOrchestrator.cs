@@ -81,11 +81,25 @@ public sealed class SlideGenerationOrchestrator
             KeyConstraints = []
         };
 
-        // 2) Web research (temporarily disabled)
-        var webResearch = new WebResearchOutput { Findings = [], Citations = [], UsedQueries = [] };
+        // 2) Web research
+        WebResearchOutput webResearch;
+        if (planner.SearchQueries.Count > 0)
+        {
+            await _jobs.UpdateAsync(workItem.JobId, s => s.Step = JobSteps.ResearchWeb, cancellationToken);
+            _logger.LogInformation("Step {Step}", JobSteps.ResearchWeb);
+            webResearch = await RunWebResearchAsync(planner.SearchQueries, cancellationToken);
+            await AddWebSourcesAsync(workItem.JobId, webResearch, cancellationToken);
+        }
+        else
+        {
+            webResearch = new WebResearchOutput { Findings = [], Citations = [], UsedQueries = [] };
+        }
 
-        // 3) File research (temporarily disabled)
-        var fileResearch = new FileResearchOutput { Snippets = [], FileCitations = [] };
+        // 3) File research
+        await _jobs.UpdateAsync(workItem.JobId, s => s.Step = JobSteps.ResearchFile, cancellationToken);
+        _logger.LogInformation("Step {Step}", JobSteps.ResearchFile);
+        var fileResearch = await RunFileResearchAsync(effectivePrompt, planner, cancellationToken);
+        await AddFileSourcesAsync(workItem.JobId, fileResearch, cancellationToken);
 
         // 4/5) Generate + validate loop
         var constraints = AspectPrompt.ValidatorConstraintsFor(input.Aspect);
