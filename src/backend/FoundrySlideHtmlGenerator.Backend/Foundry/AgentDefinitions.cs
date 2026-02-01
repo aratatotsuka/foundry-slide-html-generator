@@ -104,7 +104,7 @@ public static class Instructions
         - No <script> tags (strictly forbidden)
         - <style> is allowed
         - Fonts must be system fonts only (e.g., Segoe UI, Arial, Helvetica; do not request web fonts)
-        - One slide = one <section class="slide"> with clear structure
+        - Generate exactly 1 slide: output must contain exactly one <section class="slide"> with clear structure
         - The deck must render as vertical stacked slides for preview (body background ok, spacing between slides ok)
         - Use px sizing and adhere to the provided aspect template constraints (canvas size)
         """;
@@ -124,7 +124,7 @@ public static class Instructions
         - No <script> tags
         - No external resources (http/https links in src/href)
         - System fonts only
-        - Slides structure is present: multiple <section class="slide">
+        - Slides structure is present: exactly one <section class="slide">
         - Canvas size matches the requested aspect ratio template
         """;
 }
