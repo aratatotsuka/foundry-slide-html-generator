@@ -1,0 +1,146 @@
+kind: workflow
+trigger:
+  kind: OnConversationStart
+  id: trigger_wf
+  actions:
+    - kind: SetVariable
+      id: init_attempt
+      variable: Local.Attempt
+      value: =0
+
+    - kind: SetVariable
+      id: init_validation_json
+      variable: Local.ValidationJson
+      value: =""
+
+    - kind: SetVariable
+      id: init_user_prompt
+      variable: Local.UserPrompt
+      value: =System.LastMessageText
+
+    - kind: SetVariable
+      id: init_aspect
+      variable: Local.Aspect
+      value: '=If(Not(IsBlank(Find("4:3", System.LastMessageText))), "4:3", "16:9")'
+
+    - kind: SetVariable
+      id: init_constraints
+      variable: Local.Constraints
+      value: '=If(Local.Aspect="4:3", "Canvas size: 1024x768 px. Slide: <section class=slide> with width:1024px;height:768px. Safe margin: 48px. Slide count: 1. No <script> tags. No external http/https resources in href/src. System fonts only.", "Canvas size: 1920x1080 px. Slide: <section class=slide> with width:1920px;height:1080px. Safe margin: 64px. Slide count: 1. No <script> tags. No external http/https resources in href/src. System fonts only.")'
+
+    - kind: SetVariable
+      id: planner_input
+      variable: Local.LatestMessage
+      value: '=UserMessage("Prompt: " & Local.UserPrompt & " / Aspect: " & Local.Aspect & " / Constraints: " & Local.Constraints)'
+
+    - kind: InvokeAzureAgent
+      id: plan
+      agent:
+        name: agent-planner
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.LatestMessage
+      output:
+        messages: Local.LatestMessage
+        autoSend: false
+
+    - kind: SetVariable
+      id: capture_plan
+      variable: Local.PlanJson
+      value: =Last(Local.LatestMessage).Text
+
+    # Loop entry point (GotoAction target)
+    - kind: SetVariable
+      id: loop_start
+      variable: Local.Noop
+      value: =Local.Attempt
+
+    - kind: SetVariable
+      id: generator_input
+      variable: Local.LatestMessage
+      value: '=UserMessage("Prompt: " & Local.UserPrompt & " / Aspect: " & Local.Aspect & " / PlannerJson: " & Local.PlanJson & " / Constraints: " & Local.Constraints & " / PreviousValidatorJson: " & Local.ValidationJson)'
+
+    - kind: InvokeAzureAgent
+      id: generate_html
+      agent:
+        name: agent-html-generator
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.LatestMessage
+      output:
+        messages: Local.LatestMessage
+        autoSend: false
+
+    - kind: SetVariable
+      id: capture_html
+      variable: Local.Html
+      value: =Last(Local.LatestMessage).Text
+
+    - kind: SetVariable
+      id: validator_input
+      variable: Local.LatestMessage
+      value: '=UserMessage("HTML: " & Local.Html & " / Constraints: " & Local.Constraints)'
+
+    - kind: InvokeAzureAgent
+      id: validate_html
+      agent:
+        name: agent-validator
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.LatestMessage
+      output:
+        messages: Local.LatestMessage
+        autoSend: false
+
+    - kind: SetVariable
+      id: capture_validation
+      variable: Local.ValidationJson
+      value: =Last(Local.LatestMessage).Text
+
+    - kind: SetVariable
+      id: increment_attempt
+      variable: Local.Attempt
+      value: =Local.Attempt + 1
+
+    - kind: ConditionGroup
+      id: check_ok
+      conditions:
+        - id: ok_with_space
+          condition: '=!IsBlank(Find("""OK"": TRUE", Upper(Local.ValidationJson)))'
+          actions:
+            - kind: SendActivity
+              id: send_ok1
+              activity: =Local.Html
+            - kind: EndConversation
+              id: end_ok1
+        - id: ok_no_space
+          condition: '=!IsBlank(Find("""OK"":TRUE", Upper(Local.ValidationJson)))'
+          actions:
+            - kind: SendActivity
+              id: send_ok2
+              activity: =Local.Html
+            - kind: EndConversation
+              id: end_ok2
+      elseActions:
+        - kind: ConditionGroup
+          id: check_retry
+          conditions:
+            - id: should_retry
+              condition: =Local.Attempt < 3
+              actions:
+                - kind: GotoAction
+                  id: goto_retry
+                  actionId: loop_start
+          elseActions:
+            - kind: SendActivity
+              id: send_best_effort_html
+              activity: =Local.Html
+            - kind: SendActivity
+              id: send_best_effort_validation
+              activity: =Local.ValidationJson
+            - kind: EndConversation
+              id: end_failed
+
+id: ""
+name: slide-html-generator
+description: Generate a single self-contained HTML slide via multiple Foundry agents (planner -> generator -> validator loop).

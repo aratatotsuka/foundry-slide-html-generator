@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Azure.Core;
 using Microsoft.Extensions.Options;
 
@@ -18,7 +19,10 @@ namespace FoundrySlideHtmlGenerator.Backend.Foundry;
 // - Uses OpenAI-compatible /openai/files + /openai/vector_stores for file_search
 public sealed class FoundryClient : IFoundryClient
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     private readonly HttpClient _httpClient;
     private readonly FoundryOptions _options;
@@ -150,6 +154,97 @@ public sealed class FoundryClient : IFoundryClient
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
+    public async Task<IReadOnlyDictionary<string, string>> ListAssistantsByNameAsync(CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri("assistants"), apiVersion: "v1");
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, uri), cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        using var json = await ReadJsonAsync(response, cancellationToken);
+        var root = json.RootElement;
+
+        var data = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("data", out var dataProp) && dataProp.ValueKind == JsonValueKind.Array
+            ? dataProp
+            : root.ValueKind == JsonValueKind.Array
+                ? root
+                : default;
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (data.ValueKind != JsonValueKind.Array)
+        {
+            return map;
+        }
+
+        foreach (var assistant in data.EnumerateArray())
+        {
+            if (!assistant.TryGetProperty("id", out var idProp) || idProp.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            if (!assistant.TryGetProperty("name", out var nameProp) || nameProp.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var id = idProp.GetString();
+            var name = nameProp.GetString();
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            map[name] = id;
+        }
+
+        return map;
+    }
+
+    public async Task<string> CreateAssistantAsync(AssistantDefinition definition, CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri("assistants"), apiVersion: "v1");
+        var body = JsonSerializer.Serialize(new
+        {
+            model = _options.ModelDeploymentName,
+            name = definition.Name,
+            instructions = definition.Instructions,
+            tools = definition.Tools,
+            tool_resources = definition.ToolResources
+        }, JsonOptions);
+
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        }, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        using var json = await ReadJsonAsync(response, cancellationToken);
+        if (json.RootElement.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
+        {
+            return idProp.GetString()!;
+        }
+
+        throw new InvalidOperationException("CreateAssistantAsync: response missing id.");
+    }
+
+    public async Task UpdateAssistantAsync(string assistantId, AssistantDefinition definition, CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri($"assistants/{assistantId}"), apiVersion: "v1");
+        var body = JsonSerializer.Serialize(new
+        {
+            model = _options.ModelDeploymentName,
+            instructions = definition.Instructions,
+            tools = definition.Tools,
+            tool_resources = definition.ToolResources
+        }, JsonOptions);
+
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        }, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
     public async Task<string> UploadFileAsync(string filePath, CancellationToken cancellationToken)
     {
         var uri = WithApiVersion(BuildProjectUri("openai/files"));
@@ -243,6 +338,78 @@ public sealed class FoundryClient : IFoundryClient
         return await ReadJsonAsync(response, cancellationToken);
     }
 
+    public async Task<JsonDocument> CreateProjectResponseAsync(JsonDocument requestBody, CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri("openai/responses"));
+        var payload = requestBody.RootElement.GetRawText();
+        var sw = Stopwatch.StartNew();
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
+        sw.Stop();
+
+        _logger.LogInformation("Foundry (project) /openai/responses {StatusCode} in {ElapsedMs}ms", (int)response.StatusCode, sw.ElapsedMilliseconds);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await ReadJsonAsync(response, cancellationToken);
+    }
+
+    public async Task<string> CreateConversationAsync(JsonDocument requestBody, CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri("openai/conversations"));
+        var payload = requestBody.RootElement.GetRawText();
+
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        using var json = await ReadJsonAsync(response, cancellationToken);
+        if (json.RootElement.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
+        {
+            return idProp.GetString()!;
+        }
+
+        throw new InvalidOperationException("CreateConversationAsync: response missing id.");
+    }
+
+    public async Task<JsonDocument> CreateThreadAndRunAsync(JsonDocument requestBody, CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri("threads/runs"), apiVersion: "v1");
+        var payload = requestBody.RootElement.GetRawText();
+
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await ReadJsonAsync(response, cancellationToken);
+    }
+
+    public async Task<JsonDocument> GetRunAsync(string threadId, string runId, CancellationToken cancellationToken)
+    {
+        var uri = WithApiVersion(BuildProjectUri($"threads/{threadId}/runs/{runId}"), apiVersion: "v1");
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, uri), cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await ReadJsonAsync(response, cancellationToken);
+    }
+
+    public async Task<JsonDocument> ListMessagesAsync(string threadId, int limit, string order, CancellationToken cancellationToken)
+    {
+        var baseUri = BuildProjectUri($"threads/{threadId}/messages");
+        var builder = new UriBuilder(baseUri)
+        {
+            Query = $"limit={limit}&order={Uri.EscapeDataString(order)}"
+        };
+
+        var uri = WithApiVersion(builder.Uri, apiVersion: "v1");
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, uri), cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await ReadJsonAsync(response, cancellationToken);
+    }
+
     private Uri BuildProjectUri(string relativePath) => Combine(_options.ProjectEndpoint, relativePath);
 
     private Uri BuildExecutionUri(string relativePath)
@@ -280,17 +447,19 @@ public sealed class FoundryClient : IFoundryClient
         return new Uri(baseUri, relativePath);
     }
 
-    private Uri WithApiVersion(Uri uri)
+    private Uri WithApiVersion(Uri uri) => WithApiVersion(uri, apiVersion: _options.ApiVersion);
+
+    private static Uri WithApiVersion(Uri uri, string apiVersion)
     {
         var builder = new UriBuilder(uri);
         var query = builder.Query;
         if (string.IsNullOrWhiteSpace(query))
         {
-            builder.Query = $"api-version={Uri.EscapeDataString(_options.ApiVersion)}";
+            builder.Query = $"api-version={Uri.EscapeDataString(apiVersion)}";
         }
         else if (!query.Contains("api-version=", StringComparison.OrdinalIgnoreCase))
         {
-            builder.Query = query.TrimStart('?') + "&api-version=" + Uri.EscapeDataString(_options.ApiVersion);
+            builder.Query = query.TrimStart('?') + "&api-version=" + Uri.EscapeDataString(apiVersion);
         }
 
         return builder.Uri;
