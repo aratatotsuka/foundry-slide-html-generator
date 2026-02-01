@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using FoundrySlideHtmlGenerator.Backend.Foundry;
 using FoundrySlideHtmlGenerator.Backend.Jobs;
 using FoundrySlideHtmlGenerator.Backend.Rendering;
@@ -206,22 +207,49 @@ public sealed class SlideGenerationOrchestrator
             _logger.LogInformation("Step {Step} (attempt {Attempt})", JobSteps.Validate, attempt + 1);
             var validator = await RunValidatorAsync(html, constraints, cancellationToken);
 
-            if (validator.Ok)
+            var slideCount = CountSlides(html);
+            var slideCountIssue = slideCount == 1 ? null : $"Expected exactly 1 <section class=\"slide\"> but found {slideCount}.";
+
+            if (validator.Ok && slideCountIssue is null)
             {
                 return html;
             }
 
             if (attempt >= 2)
             {
-                throw new InvalidOperationException("HTML validation failed: " + string.Join(" | ", validator.Issues.Take(8)));
+                var issues = validator.Issues.Take(8).ToList();
+                if (slideCountIssue is not null)
+                {
+                    issues.Insert(0, slideCountIssue);
+                }
+
+                throw new InvalidOperationException("HTML validation failed: " + string.Join(" | ", issues));
             }
 
+            var issuesText = string.Join("\n", validator.Issues.Select(i => $"- {i}"));
+            var combinedIssues = slideCountIssue is not null
+                ? string.Join("\n", new[] { $"- {slideCountIssue}", issuesText }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                : issuesText;
+
             fixedAppendix = !string.IsNullOrWhiteSpace(validator.FixedPromptAppendix)
-                ? validator.FixedPromptAppendix
-                : "Fix these issues:\n" + string.Join("\n", validator.Issues.Select(i => $"- {i}"));
+                ? (slideCountIssue is not null ? validator.FixedPromptAppendix + "\n" + slideCountIssue : validator.FixedPromptAppendix)
+                : "Fix these issues:\n" + combinedIssues;
         }
 
         throw new InvalidOperationException("GenerateWithValidationLoopAsync: unreachable.");
+    }
+
+    private static int CountSlides(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return 0;
+        }
+
+        return Regex.Matches(
+            html,
+            "<section\\b[^>]*class\\s*=\\s*(['\"])\\s*[^'\"]*\\bslide\\b[^'\"]*\\1[^>]*>",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Count;
     }
 
     private async Task<string> RunHtmlGeneratorAsync(
@@ -394,6 +422,7 @@ public static class AspectPrompt
         "4:3" => """
                  - Canvas size: 1024x768 px
                  - Each slide: <section class="slide"> with width:1024px;height:768px
+                 - Slide count: 1 (exactly one <section class="slide">)
                  - No <script> tags
                  - No external http/https resources in href/src
                  - System fonts only
@@ -401,6 +430,7 @@ public static class AspectPrompt
         _ => """
              - Canvas size: 1920x1080 px
              - Each slide: <section class="slide"> with width:1920px;height:1080px
+             - Slide count: 1 (exactly one <section class="slide">)
              - No <script> tags
              - No external http/https resources in href/src
              - System fonts only
