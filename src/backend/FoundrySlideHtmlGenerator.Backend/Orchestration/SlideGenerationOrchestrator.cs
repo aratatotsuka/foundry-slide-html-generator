@@ -54,38 +54,45 @@ public sealed class SlideGenerationOrchestrator
 
         var effectivePrompt = AspectPrompt.ComposeEffectivePrompt(input.Prompt, input.Aspect);
 
-        // 1) Planner (single-slide mode: local plan)
+        // 1) Planner
         var title = (input.Prompt ?? "").Split('\n', 2, StringSplitOptions.TrimEntries)[0];
         if (string.IsNullOrWhiteSpace(title))
         {
             title = "Slide";
         }
 
-        var planner = new PlannerOutput
+        PlannerOutput planner;
+        try
         {
-            SlideCount = 1,
-            SlideOutline =
-            [
-                new SlideOutlineItem
-                {
-                    Title = title.Length > 80 ? title[..80] : title,
-                    Bullets =
-                    [
-                        "Overview",
-                        "Key points",
-                        "Summary"
-                    ]
-                }
-            ],
-            SearchQueries = [],
-            KeyConstraints = []
-        };
+            planner = await RunPlannerAsync(effectivePrompt, input.ImageDataUrl, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Planner failed; falling back to a local plan.");
+            planner = BuildFallbackPlanner(title);
+        }
 
-        // 2) Web research (temporarily disabled)
-        var webResearch = new WebResearchOutput { Findings = [], Citations = [], UsedQueries = [] };
+        planner = NormalizeToSingleSlidePlanner(planner, title);
 
-        // 3) File research (temporarily disabled)
-        var fileResearch = new FileResearchOutput { Snippets = [], FileCitations = [] };
+        // 2) Web research
+        WebResearchOutput webResearch;
+        if (planner.SearchQueries.Count > 0)
+        {
+            await _jobs.UpdateAsync(workItem.JobId, s => s.Step = JobSteps.ResearchWeb, cancellationToken);
+            _logger.LogInformation("Step {Step}", JobSteps.ResearchWeb);
+            webResearch = await RunWebResearchAsync(planner.SearchQueries, cancellationToken);
+            await AddWebSourcesAsync(workItem.JobId, webResearch, cancellationToken);
+        }
+        else
+        {
+            webResearch = new WebResearchOutput { Findings = [], Citations = [], UsedQueries = [] };
+        }
+
+        // 3) File research
+        await _jobs.UpdateAsync(workItem.JobId, s => s.Step = JobSteps.ResearchFile, cancellationToken);
+        _logger.LogInformation("Step {Step}", JobSteps.ResearchFile);
+        var fileResearch = await RunFileResearchAsync(effectivePrompt, planner, cancellationToken);
+        await AddFileSourcesAsync(workItem.JobId, fileResearch, cancellationToken);
 
         // 4/5) Generate + validate loop
         var constraints = AspectPrompt.ValidatorConstraintsFor(input.Aspect);
@@ -109,6 +116,81 @@ public sealed class SlideGenerationOrchestrator
             state.Step = null;
             state.Error = null;
         }, cancellationToken);
+    }
+
+    private static PlannerOutput BuildFallbackPlanner(string title)
+        => new()
+        {
+            SlideCount = 1,
+            SlideOutline =
+            [
+                new SlideOutlineItem
+                {
+                    Title = title.Length > 80 ? title[..80] : title,
+                    Bullets =
+                    [
+                        "Overview",
+                        "Key points",
+                        "Summary"
+                    ]
+                }
+            ],
+            SearchQueries = [],
+            KeyConstraints = []
+        };
+
+    private static PlannerOutput NormalizeToSingleSlidePlanner(PlannerOutput planner, string fallbackTitle)
+    {
+        var slide = planner.SlideOutline.Count > 0
+            ? planner.SlideOutline[0]
+            : new SlideOutlineItem { Title = fallbackTitle, Bullets = ["Overview", "Key points", "Summary"] };
+
+        var title = string.IsNullOrWhiteSpace(slide.Title) ? fallbackTitle : slide.Title;
+        title = title.Length > 80 ? title[..80] : title;
+
+        var bullets = slide.Bullets
+            .Where(b => !string.IsNullOrWhiteSpace(b))
+            .Select(b => b.Trim())
+            .Take(6)
+            .ToList();
+        while (bullets.Count < 3)
+        {
+            bullets.Add(bullets.Count switch
+            {
+                0 => "Overview",
+                1 => "Key points",
+                _ => "Summary"
+            });
+        }
+
+        var queries = planner.SearchQueries
+            .Where(q => !string.IsNullOrWhiteSpace(q))
+            .Select(q => q.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        var constraints = planner.KeyConstraints
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Select(c => c.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(24)
+            .ToList();
+
+        return new PlannerOutput
+        {
+            SlideCount = 1,
+            SlideOutline =
+            [
+                new SlideOutlineItem
+                {
+                    Title = title,
+                    Bullets = bullets
+                }
+            ],
+            SearchQueries = queries,
+            KeyConstraints = constraints
+        };
     }
 
     private async Task<PlannerOutput> RunPlannerAsync(string effectivePrompt, string? imageDataUrl, CancellationToken cancellationToken)

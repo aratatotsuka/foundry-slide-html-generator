@@ -34,8 +34,16 @@ public sealed class FoundryProvisioningService : BackgroundService
         {
             _logger.LogInformation("Foundry provisioning started.");
 
-            // File research (vector store + file_search) is temporarily disabled.
-            _resources.VectorStoreId = null;
+            try
+            {
+                _resources.VectorStoreId = await EnsureVectorStoreAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Vector store provisioning failed; file_search will be unavailable.");
+                _resources.VectorStoreId = null;
+            }
+
             await EnsureAgentsAsync(stoppingToken);
 
             _resources.MarkReady();
@@ -112,11 +120,15 @@ public sealed class FoundryProvisioningService : BackgroundService
         var definitions = new List<AgentDefinition>
         {
             AgentDefinitions.Planner(),
+            AgentDefinitions.WebResearch(),
             AgentDefinitions.HtmlGenerator(),
             AgentDefinitions.Validator()
         };
 
-        // Note: File research agent is intentionally not provisioned while the feature is disabled.
+        if (!string.IsNullOrWhiteSpace(_resources.VectorStoreId))
+        {
+            definitions.Add(AgentDefinitions.FileResearch(_resources.VectorStoreId));
+        }
 
         foreach (var definition in definitions)
         {
