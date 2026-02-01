@@ -44,6 +44,60 @@ public sealed class ValidatorLoopTests
         await jobStore.CreateAsync("job1", new GenerateRequest { Prompt = "Test prompt", Aspect = "16:9" }, imageDataUrl: null, CancellationToken.None);
         await orchestrator.RunAsync(new JobWorkItem("job1"), CancellationToken.None);
 
+        Assert.Equal(1, foundry.PlannerCalls);
+        Assert.Equal(1, foundry.WebResearchCalls);
+        Assert.Equal(2, foundry.HtmlGeneratorCalls);
+        Assert.Equal(2, foundry.ValidatorCalls);
+
+        var state = await jobStore.GetAsync("job1", CancellationToken.None);
+        Assert.NotNull(state);
+        Assert.Equal(JobStatus.Succeeded, state!.Status);
+
+        Assert.NotNull(jobStore.LastHtml);
+        Assert.DoesNotContain("<script", jobStore.LastHtml!, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(jobStore.LastPng);
+        Assert.True(jobStore.LastPng!.Length > 0);
+    }
+
+    [Fact]
+    public async Task UseWorkflows_ValidatorFailure_ReGeneratesUpToTwoTimes()
+    {
+        var foundry = new FakeFoundryClient();
+        var resources = new FoundryResourceContext();
+        resources.MarkReady();
+
+        var jobStore = new InMemoryJobStore(new JobInput
+        {
+            Prompt = "Test prompt",
+            Aspect = "16:9",
+            ImageDataUrl = null
+        });
+
+        var renderer = new FakePngRenderer();
+        var options = Options.Create(new FoundryOptions
+        {
+            ProjectEndpoint = "https://example.invalid/api/projects/x",
+            ApiVersion = "2025-11-15-preview",
+            ModelDeploymentName = "model",
+            UseWorkflows = true
+        });
+
+        var orchestrator = new SlideGenerationOrchestrator(
+            foundry,
+            resources,
+            jobStore,
+            renderer,
+            options,
+            NullLogger<SlideGenerationOrchestrator>.Instance);
+
+        await jobStore.CreateAsync("job1", new GenerateRequest { Prompt = "Test prompt", Aspect = "16:9" }, imageDataUrl: null, CancellationToken.None);
+        await orchestrator.RunAsync(new JobWorkItem("job1"), CancellationToken.None);
+
+        // Workflow path generates twice, then saves final HTML once more at the end.
+        Assert.Equal(3, jobStore.SaveHtmlCalls);
+
+        Assert.Equal(1, foundry.PlannerCalls);
+        Assert.Equal(1, foundry.WebResearchCalls);
         Assert.Equal(2, foundry.HtmlGeneratorCalls);
         Assert.Equal(2, foundry.ValidatorCalls);
 
@@ -72,6 +126,7 @@ public sealed class ValidatorLoopTests
 
         public string? LastHtml { get; private set; }
         public byte[]? LastPng { get; private set; }
+        public int SaveHtmlCalls { get; private set; }
 
         public Task CreateAsync(string jobId, GenerateRequest request, string? imageDataUrl, CancellationToken cancellationToken)
         {
@@ -94,6 +149,7 @@ public sealed class ValidatorLoopTests
 
         public Task SaveHtmlAsync(string jobId, string html, CancellationToken cancellationToken)
         {
+            SaveHtmlCalls++;
             LastHtml = html;
             if (_state is not null) _state.ResultHtmlPath = "memory://result.html";
             return Task.CompletedTask;
@@ -109,6 +165,8 @@ public sealed class ValidatorLoopTests
 
     private sealed class FakeFoundryClient : IFoundryClient
     {
+        public int PlannerCalls { get; private set; }
+        public int WebResearchCalls { get; private set; }
         public int HtmlGeneratorCalls { get; private set; }
         public int ValidatorCalls { get; private set; }
 
@@ -139,16 +197,13 @@ public sealed class ValidatorLoopTests
 
             if (instructions == Instructions.Planner)
             {
+                PlannerCalls++;
                 return Task.FromResult(OutputText(JsonSerializer.Serialize(new
                 {
-                    slideCount = 5,
+                    slideCount = 1,
                     slideOutline = new[]
                     {
-                        new { title = "S1", bullets = new[] { "a", "b", "c" } },
-                        new { title = "S2", bullets = new[] { "a", "b", "c" } },
-                        new { title = "S3", bullets = new[] { "a", "b", "c" } },
-                        new { title = "S4", bullets = new[] { "a", "b", "c" } },
-                        new { title = "S5", bullets = new[] { "a", "b", "c" } }
+                        new { title = "S1", bullets = new[] { "a", "b", "c" } }
                     },
                     searchQueries = new[] { "q1", "q2", "q3" },
                     keyConstraints = new[] { "no-script" }
@@ -157,6 +212,7 @@ public sealed class ValidatorLoopTests
 
             if (instructions == Instructions.WebResearch)
             {
+                WebResearchCalls++;
                 return Task.FromResult(OutputText(JsonSerializer.Serialize(new
                 {
                     findings = Array.Empty<string>(),
@@ -197,6 +253,30 @@ public sealed class ValidatorLoopTests
             throw new InvalidOperationException("Unexpected instructions.");
         }
 
+        public Task<JsonDocument> CreateProjectResponseAsync(JsonDocument requestBody, CancellationToken cancellationToken)
+            => CreateResponseAsync(requestBody, cancellationToken);
+
+        public Task<string> CreateConversationAsync(JsonDocument requestBody, CancellationToken cancellationToken)
+            => Task.FromResult("conv_test");
+
+        public Task<IReadOnlyDictionary<string, string>> ListAssistantsByNameAsync(CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task<string> CreateAssistantAsync(AssistantDefinition definition, CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task UpdateAssistantAsync(string assistantId, AssistantDefinition definition, CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task<JsonDocument> CreateThreadAndRunAsync(JsonDocument requestBody, CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task<JsonDocument> GetRunAsync(string threadId, string runId, CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task<JsonDocument> ListMessagesAsync(string threadId, int limit, string order, CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
         private static JsonDocument OutputText(string text)
             => JsonDocument.Parse(JsonSerializer.Serialize(new
             {
@@ -204,4 +284,3 @@ public sealed class ValidatorLoopTests
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 }
-

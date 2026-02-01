@@ -10,6 +10,72 @@ public static class FoundryRequestBuilder
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    public static JsonDocument BuildAgentTextResponseRequest(
+        string agentName,
+        string? agentVersion,
+        object input)
+    {
+        // Foundry /openai/responses supports invoking an Agent (including Workflow agents)
+        // via the `agent` field (AgentReference).
+        var body = new
+        {
+            agent = new
+            {
+                type = "agent_reference",
+                name = agentName,
+                version = agentVersion
+            },
+            input
+        };
+
+        return JsonDocument.Parse(JsonSerializer.Serialize(body, JsonOptions));
+    }
+
+    public static JsonDocument BuildWorkflowAgentResponseRequest(
+        string agentName,
+        string? agentVersion,
+        string conversationId)
+    {
+        // Workflow agents require a conversation context (System.ConversationId / System.LastMessageText).
+        // For /openai/responses, `conversation` must be a string id (or an object containing `id`).
+        var body = new
+        {
+            agent = new
+            {
+                type = "agent_reference",
+                name = agentName,
+                version = agentVersion
+            },
+            conversation = conversationId
+        };
+
+        return JsonDocument.Parse(JsonSerializer.Serialize(body, JsonOptions));
+    }
+
+    public static JsonDocument BuildCreateConversationRequest(
+        string initialUserText,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        var body = new
+        {
+            items = new[]
+            {
+                new
+                {
+                    type = "message",
+                    role = "user",
+                    content = new object[]
+                    {
+                        new { type = "input_text", text = initialUserText }
+                    }
+                }
+            },
+            metadata
+        };
+
+        return JsonDocument.Parse(JsonSerializer.Serialize(body, JsonOptions));
+    }
+
     public static JsonDocument BuildJsonSchemaResponseRequest(
         string model,
         string instructions,
@@ -89,4 +155,3 @@ public static class FoundryRequestBuilder
         };
     }
 }
-

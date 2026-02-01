@@ -23,6 +23,23 @@ public sealed class FoundryOptions
     [ConfigurationKeyName("FOUNDRY_APPLICATION_ENDPOINT")]
     public string? ApplicationEndpoint { get; init; }
 
+    [ConfigurationKeyName("USE_CONNECTED_AGENTS")]
+    public bool UseConnectedAgents { get; init; } = false;
+
+    // Runs a Foundry portal workflow (Declarative Workflow Agent) via /openai/responses with an AgentReference.
+    // This is the mode that produces Foundry-side Traces/Runs for the workflow resource itself.
+    [ConfigurationKeyName("USE_FOUNDRY_WORKFLOW")]
+    public bool UseFoundryWorkflow { get; init; } = false;
+
+    // The workflow name as shown in Foundry portal Workflows (agent name).
+    [ConfigurationKeyName("FOUNDRY_WORKFLOW_NAME")]
+    public string FoundryWorkflowName { get; init; } = "slide-html-generator";
+
+    // Runs the multi-agent flow via Microsoft Agent Framework Workflows (graph orchestration),
+    // instead of imperative orchestration code.
+    [ConfigurationKeyName("USE_WORKFLOWS")]
+    public bool UseWorkflows { get; init; } = true;
+
     [ConfigurationKeyName("SEED_DATA_DIR")]
     public string SeedDataDir { get; init; } = "seed-data";
 

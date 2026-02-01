@@ -30,21 +30,56 @@ public sealed class FoundryProvisioningService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _logger.LogInformation("Foundry provisioning started.");
+
         try
         {
-            _logger.LogInformation("Foundry provisioning started.");
-
             // File research (vector store + file_search) is temporarily disabled.
             _resources.VectorStoreId = null;
-            await EnsureAgentsAsync(stoppingToken);
+            if (_options.UseConnectedAgents)
+            {
+                try
+                {
+                    await EnsureAssistantsAsync(stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Assistant provisioning failed. Connected Agents mode will be disabled for this process.");
+                    _resources.AssistantIds.Clear();
+                }
+            }
 
-            _resources.MarkReady();
-            _logger.LogInformation("Foundry provisioning completed.");
+            try
+            {
+                await EnsureAgentsAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Prompt-agent provisioning failed. Continuing without provisioned agents.");
+                _resources.AgentIds.Clear();
+            }
+
+            if (_options.UseFoundryWorkflow)
+            {
+                try
+                {
+                    await EnsureWorkflowAgentAsync(stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Workflow agent lookup failed. Foundry workflow mode will be unavailable for this process.");
+                    _resources.AgentIds.Remove(_options.FoundryWorkflowName);
+                }
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Foundry provisioning failed.");
-            _resources.MarkFailed(ex);
+        }
+        finally
+        {
+            _resources.MarkReady();
+            _logger.LogInformation("Foundry provisioning completed.");
         }
     }
 
@@ -162,5 +197,124 @@ public sealed class FoundryProvisioningService : BackgroundService
         }
 
         return null;
+    }
+
+    private async Task EnsureAssistantsAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyDictionary<string, string> existing;
+        try
+        {
+            existing = await _client.ListAssistantsByNameAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list existing assistants. Will attempt create blindly.");
+            existing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Create/update leaf assistants first (these are invoked via connected_agent tools).
+        var leafDefinitions = new List<AssistantDefinition>
+        {
+            new(AssistantNames.HtmlGenerator, Instructions.HtmlGenerator, Tools: []),
+            new(AssistantNames.Validator, Instructions.Validator, Tools: [])
+        };
+
+        foreach (var definition in leafDefinitions)
+        {
+            if (existing.TryGetValue(definition.Name, out var id))
+            {
+                _logger.LogInformation("Updating assistant {Name} ({Id})", definition.Name, id);
+                await _client.UpdateAssistantAsync(id, definition, cancellationToken);
+                _resources.AssistantIds[definition.Name] = id;
+            }
+            else
+            {
+                _logger.LogInformation("Creating assistant {Name}", definition.Name);
+                var createdId = await _client.CreateAssistantAsync(definition, cancellationToken);
+                _resources.AssistantIds[definition.Name] = createdId;
+                existing = new Dictionary<string, string>(existing, StringComparer.OrdinalIgnoreCase)
+                {
+                    [definition.Name] = createdId
+                };
+            }
+        }
+
+        if (!_resources.AssistantIds.TryGetValue(AssistantNames.HtmlGenerator, out var htmlGeneratorId)
+            || !_resources.AssistantIds.TryGetValue(AssistantNames.Validator, out var validatorId))
+        {
+            throw new InvalidOperationException("Assistant provisioning failed: missing leaf assistant ids.");
+        }
+
+        var orchestratorDefinition = new AssistantDefinition(
+            AssistantNames.Planner,
+            Instructions.ConnectedOrchestrator,
+            Tools:
+            [
+                new
+                {
+                    type = "connected_agent",
+                    connected_agent = new
+                    {
+                        id = htmlGeneratorId,
+                        name = "html_generator",
+                        description = "Generate the final self-contained HTML for a single slide."
+                    }
+                },
+                new
+                {
+                    type = "connected_agent",
+                    connected_agent = new
+                    {
+                        id = validatorId,
+                        name = "validator",
+                        description = "Validate generated HTML and return JSON with issues and fix appendix."
+                    }
+                }
+            ]);
+
+        if (existing.TryGetValue(orchestratorDefinition.Name, out var existingOrchestratorId))
+        {
+            _logger.LogInformation("Updating assistant {Name} ({Id})", orchestratorDefinition.Name, existingOrchestratorId);
+            await _client.UpdateAssistantAsync(existingOrchestratorId, orchestratorDefinition, cancellationToken);
+            _resources.AssistantIds[orchestratorDefinition.Name] = existingOrchestratorId;
+        }
+        else
+        {
+            _logger.LogInformation("Creating assistant {Name}", orchestratorDefinition.Name);
+            var createdId = await _client.CreateAssistantAsync(orchestratorDefinition, cancellationToken);
+            _resources.AssistantIds[orchestratorDefinition.Name] = createdId;
+        }
+    }
+
+    private async Task EnsureWorkflowAgentAsync(CancellationToken cancellationToken)
+    {
+        var workflowName = _options.FoundryWorkflowName?.Trim();
+        if (string.IsNullOrWhiteSpace(workflowName))
+        {
+            _logger.LogWarning("USE_FOUNDRY_WORKFLOW=true but FOUNDRY_WORKFLOW_NAME is empty. Foundry workflow mode will be unavailable.");
+            return;
+        }
+
+        IReadOnlyDictionary<string, string> existingAgents;
+        try
+        {
+            existingAgents = await _client.ListAgentsByNameAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list agents while looking up workflow '{WorkflowName}'.", workflowName);
+            return;
+        }
+
+        if (existingAgents.TryGetValue(workflowName, out var id) && !string.IsNullOrWhiteSpace(id))
+        {
+            _logger.LogInformation("Using Foundry workflow agent {Name} ({Id})", workflowName, id);
+            _resources.AgentIds[workflowName] = id;
+            return;
+        }
+
+        _logger.LogWarning(
+            "Foundry workflow agent '{WorkflowName}' was not found. Create it in Foundry portal (Workflows) before enabling USE_FOUNDRY_WORKFLOW.",
+            workflowName);
     }
 }
