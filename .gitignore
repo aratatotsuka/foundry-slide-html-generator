@@ -1,0 +1,28 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+*.cache
+*.log
+
+# Node
+**/node_modules/
+**/dist/
+**/.vite/
+
+# Local app data
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Env files (do not commit secrets)
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.*.local

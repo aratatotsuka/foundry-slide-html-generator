@@ -1,0 +1,14 @@
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/.vite
+**/.cache
+**/.next
+data
+.git
+.idea
+.vscode
+*.user
+*.suo
+*.log

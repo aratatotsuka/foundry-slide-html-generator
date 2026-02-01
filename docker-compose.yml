@@ -1,0 +1,48 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: src/backend/FoundrySlideHtmlGenerator.Backend/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # Required (set in your shell or a .env file)
+      - FOUNDRY_PROJECT_ENDPOINT=${FOUNDRY_PROJECT_ENDPOINT}
+      - MODEL_DEPLOYMENT_NAME=${MODEL_DEPLOYMENT_NAME}
+
+      # Optional
+      - FOUNDRY_API_VERSION=${FOUNDRY_API_VERSION:-2025-11-15-preview}
+      - USE_AGENT_APPLICATION=${USE_AGENT_APPLICATION:-false}
+      - FOUNDRY_APPLICATION_ENDPOINT=${FOUNDRY_APPLICATION_ENDPOINT}
+      - FOUNDRY_HTTP_TIMEOUT_SECONDS=${FOUNDRY_HTTP_TIMEOUT_SECONDS:-600}
+
+      # App behavior
+      - ASPNETCORE_URLS=http://+:8080
+      - CORS_ALLOWED_ORIGINS=http://localhost:5173
+      - JOB_DATA_DIR=/app/data/jobs
+      - STATE_STORE=local
+      - STATE_LOCAL_PATH=/app/data/state.json
+      - SEED_DATA_DIR=seed-data
+      - ALLOW_HTML_DOWNLOAD=${ALLOW_HTML_DOWNLOAD:-false}
+      - HTML_DOWNLOAD_API_KEY=${HTML_DOWNLOAD_API_KEY}
+
+      # DefaultAzureCredential (optional for local docker): EnvironmentCredential
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
+    volumes:
+      - backend-data:/app/data
+
+  frontend:
+    build:
+      context: .
+      dockerfile: src/frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  backend-data:
