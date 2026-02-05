@@ -54,8 +54,13 @@ public static class FoundryRequestBuilder
 
     public static JsonDocument BuildCreateConversationRequest(
         string initialUserText,
+        string? imageDataUrl,
         IReadOnlyDictionary<string, string>? metadata)
     {
+        object[] content = string.IsNullOrWhiteSpace(imageDataUrl)
+            ? [new { type = "input_text", text = initialUserText }]
+            : [new { type = "input_text", text = initialUserText }, new { type = "input_image", image_url = imageDataUrl }];
+
         var body = new
         {
             items = new[]
@@ -64,10 +69,7 @@ public static class FoundryRequestBuilder
                 {
                     type = "message",
                     role = "user",
-                    content = new object[]
-                    {
-                        new { type = "input_text", text = initialUserText }
-                    }
+                    content
                 }
             },
             metadata

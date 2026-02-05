@@ -117,6 +117,8 @@ public static class Instructions
         - slideOutline: list of exactly 1 slide with title + 3-6 bullets
         - searchQueries: 0-8 short web queries (Japanese or English ok)
         - keyConstraints: include any hard requirements from the prompt (e.g., "no scripts", "system fonts", aspect ratio)
+
+        If the user message includes an input image, use it as reference material for the outline (extract key content, structure, and style cues) and follow the user's text instructions for how to transform it into a slide.
         """;
 
     public const string WebResearch =
@@ -147,6 +149,8 @@ public static class Instructions
         You are agent_html_generator.
 
         Output MUST be a single self-contained HTML file (as plain text, no markdown) and nothing else.
+
+        If the user message includes an input image, use it as reference material (layout, colors, charts/diagrams, key text) and follow the user's text instructions for how to turn it into a slide. Prefer recreating visuals with HTML/CSS/SVG rather than embedding the image.
 
         Hard constraints:
         - No external CDN/resources (no <link href="https://...">, no remote images, etc.)
