@@ -67,6 +67,7 @@ public sealed class SlideGenerationOrchestrator
                     workItem.JobId,
                     effectivePrompt,
                     input.Aspect,
+                    input.ImageDataUrl,
                     cancellationToken);
 
                 await _jobs.SaveHtmlAsync(workItem.JobId, foundryWorkflowHtml, cancellationToken);
@@ -205,6 +206,7 @@ public sealed class SlideGenerationOrchestrator
             workItem.JobId,
             effectivePrompt,
             input.Aspect,
+            input.ImageDataUrl,
             planner,
             webResearch,
             fileResearch,
@@ -292,7 +294,12 @@ public sealed class SlideGenerationOrchestrator
         return html;
     }
 
-    private async Task<string> RunFoundryWorkflowAsync(string jobId, string effectivePrompt, string aspect, CancellationToken cancellationToken)
+    private async Task<string> RunFoundryWorkflowAsync(
+        string jobId,
+        string effectivePrompt,
+        string aspect,
+        string? imageDataUrl,
+        CancellationToken cancellationToken)
     {
         var workflowName = _options.FoundryWorkflowName?.Trim();
         if (string.IsNullOrWhiteSpace(workflowName))
@@ -322,6 +329,7 @@ public sealed class SlideGenerationOrchestrator
 
         using var createConversation = FoundryRequestBuilder.BuildCreateConversationRequest(
             initialUserText: workflowPrompt,
+            imageDataUrl: imageDataUrl,
             metadata: new Dictionary<string, string>
             {
                 ["jobId"] = jobId,
@@ -612,6 +620,7 @@ public sealed class SlideGenerationOrchestrator
     private sealed record SlideWorkflowState(
         string EffectivePrompt,
         string Aspect,
+        string? ImageDataUrl,
         PlannerOutput Planner,
         WebResearchOutput Web,
         FileResearchOutput File,
@@ -659,6 +668,7 @@ public sealed class SlideGenerationOrchestrator
             return new SlideWorkflowState(
                 EffectivePrompt: effectivePrompt,
                 Aspect: _aspect,
+                ImageDataUrl: _imageDataUrl,
                 Planner: planner,
                 Web: EmptyWebResearch(),
                 File: EmptyFileResearch(),
@@ -751,6 +761,7 @@ public sealed class SlideGenerationOrchestrator
             var html = await _owner.RunHtmlGeneratorAsync(
                 state.EffectivePrompt,
                 state.Aspect,
+                state.ImageDataUrl,
                 state.Planner,
                 state.Web,
                 state.File,
@@ -1057,6 +1068,7 @@ public sealed class SlideGenerationOrchestrator
         string jobId,
         string effectivePrompt,
         string aspect,
+        string? imageDataUrl,
         PlannerOutput planner,
         WebResearchOutput web,
         FileResearchOutput file,
@@ -1068,7 +1080,7 @@ public sealed class SlideGenerationOrchestrator
         {
             await _jobs.UpdateAsync(jobId, s => s.Step = JobSteps.GenerateHtml, cancellationToken);
             _logger.LogInformation("Step {Step} (attempt {Attempt})", JobSteps.GenerateHtml, attempt + 1);
-            var html = await RunHtmlGeneratorAsync(effectivePrompt, aspect, planner, web, file, fixedAppendix, cancellationToken);
+            var html = await RunHtmlGeneratorAsync(effectivePrompt, aspect, imageDataUrl, planner, web, file, fixedAppendix, cancellationToken);
             html = FoundryResponseParser.StripCodeFences(html).Trim();
 
             await _jobs.SaveHtmlAsync(jobId, html, cancellationToken);
@@ -1125,6 +1137,7 @@ public sealed class SlideGenerationOrchestrator
     private async Task<string> RunHtmlGeneratorAsync(
         string effectivePrompt,
         string aspect,
+        string? imageDataUrl,
         PlannerOutput planner,
         WebResearchOutput web,
         FileResearchOutput file,
@@ -1201,7 +1214,7 @@ public sealed class SlideGenerationOrchestrator
         var body = FoundryRequestBuilder.BuildTextResponseRequest(
             model: _options.ModelDeploymentName,
             instructions: Instructions.HtmlGenerator,
-            input: FoundryRequestBuilder.BuildUserInput(text.ToString(), imageDataUrl: null),
+            input: FoundryRequestBuilder.BuildUserInput(text.ToString(), imageDataUrl),
             tools: []);
 
         using var response = await _foundry.CreateResponseAsync(body, cancellationToken);

@@ -31,7 +31,7 @@ trigger:
     - kind: SetVariable
       id: planner_input
       variable: Local.LatestMessage
-      value: '=UserMessage("Prompt: " & Local.UserPrompt & " / Aspect: " & Local.Aspect & " / Constraints: " & Local.Constraints)'
+      value: '=UserMessage("Prompt: " & Local.UserPrompt & " / Aspect: " & Local.Aspect & " / Constraints: " & Local.Constraints & " / NOTE: If the first user message includes an input image, use it as reference.")'
 
     - kind: InvokeAzureAgent
       id: plan
@@ -58,7 +58,7 @@ trigger:
     - kind: SetVariable
       id: generator_input
       variable: Local.LatestMessage
-      value: '=UserMessage("Prompt: " & Local.UserPrompt & " / Aspect: " & Local.Aspect & " / PlannerJson: " & Local.PlanJson & " / Constraints: " & Local.Constraints & " / PreviousValidatorJson: " & Local.ValidationJson)'
+      value: '=UserMessage("Prompt: " & Local.UserPrompt & " / Aspect: " & Local.Aspect & " / PlannerJson: " & Local.PlanJson & " / Constraints: " & Local.Constraints & " / PreviousValidatorJson: " & Local.ValidationJson & " / NOTE: If the first user message includes an input image, use it as reference.")'
 
     - kind: InvokeAzureAgent
       id: generate_html

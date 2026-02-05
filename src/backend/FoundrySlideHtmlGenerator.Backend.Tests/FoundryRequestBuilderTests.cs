@@ -6,6 +6,21 @@ namespace FoundrySlideHtmlGenerator.Backend.Tests;
 public sealed class FoundryRequestBuilderTests
 {
     [Fact]
+    public void BuildCreateConversationRequest_IncludesImageWhenProvided()
+    {
+        using var doc = FoundryRequestBuilder.BuildCreateConversationRequest(
+            initialUserText: "hi",
+            imageDataUrl: "data:image/png;base64,AAAA",
+            metadata: null);
+
+        var content = doc.RootElement.GetProperty("items")[0].GetProperty("content");
+        Assert.Equal(2, content.GetArrayLength());
+        Assert.Equal("input_text", content[0].GetProperty("type").GetString());
+        Assert.Equal("input_image", content[1].GetProperty("type").GetString());
+        Assert.Equal("data:image/png;base64,AAAA", content[1].GetProperty("image_url").GetString());
+    }
+
+    [Fact]
     public void BuildUserInput_IncludesImageWhenProvided()
     {
         var input = FoundryRequestBuilder.BuildUserInput("hi", "data:image/png;base64,AAAA");
@@ -40,4 +55,3 @@ public sealed class FoundryRequestBuilderTests
         Assert.Equal("object", textFormat.GetProperty("schema").GetProperty("type").GetString());
     }
 }
-
